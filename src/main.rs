@@ -1,31 +1,51 @@
 use anyhow::{Context, Result};
+use std::time::Instant;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    println!("Rust HTTPS Check");
-    
-    let url = std::env::args().nth(1)
-        .or_else(|| std::env::var("URL").ok())
-        .unwrap_or_else(|| "https://example.com".to_string());
+    let urls: Vec<String> = std::env::args().skip(1).collect();
 
-    println!("-> Requesting [GET]: {url}");
+    if urls.is_empty() {
+        eprintln!("Usage: rust-https-check <url1> <url2> ...");
+        eprintln!("Example: rust-https-check https://example.com https://google.com");
+        std::process::exit(1);
+    }
 
-    // reqwest client using rustls + *native roots*
-    // /etc/ssl/certs will be required on container
+    for url in urls {
+        println!("\nTesting: {url}");
+        let start = Instant::now();
+
+        match fetch_url(&url).await {
+            Ok(size) => {
+                let elapsed = start.elapsed();
+                println!("✅ SUCCESS: Received {size} bytes in {:.2?}", elapsed);
+            }
+            Err(err) => {
+                println!("❌ FAILURE: {err:#}");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn fetch_url(url: &str) -> Result<usize> {
     let client = reqwest::Client::builder()
         .https_only(true)
         .build()
-        .context("failed to build a http client")?;
+        .context("Failed to build HTTP client")?;
 
     let resp = client
-        .get(&url)
+        .get(url)
         .send()
         .await
-        .with_context(|| format!("request failed: {url}"))?;
+        .with_context(|| format!("Request to {url} failed"))?;
 
-    println!("Status: {}", resp.status());
-    let bytes = resp.bytes().await.context("failed to read body")?;
-    println!("Body: {} bytes", bytes.len());
+    let status = resp.status();
+    if !status.is_success() {
+        anyhow::bail!("Non-OK HTTP status: {}", status);
+    }
 
-    Ok(())
+    let bytes = resp.bytes().await.context("Failed to read response body")?;
+    Ok(bytes.len())
 }
